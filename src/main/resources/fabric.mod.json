@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "clones_on_phisics",
+  "version": "${version}",
+  "name": "Clones on Physics",
+  "description": "Clones and physics mod",
+  "authors": [
+    "rengenka150-cmyk"
+  ],
+  "license": "CC0-1.0",
+  "environment": "*",
+  "entrypoints": {
+    "main": [
+      "com.example.Clones_on_phisics"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=0.18.1",
+    "minecraft": "~1.21.11",
+    "java": ">=21",
+    "fabric-api": "*"
+  }
+}
