@@ -5,11 +5,14 @@ import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.minecraft.command.CommandRegistryAccess;
+import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityType;
 import net.minecraft.entity.mob.ArmorStandEntity;
 import net.minecraft.particle.ParticleTypes;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.command.CommandManager;
 import net.minecraft.server.command.ServerCommandSource;
+import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.text.Text;
 import net.minecraft.util.math.Vec3d;
@@ -25,7 +28,6 @@ public class Clones_on_phisics implements ModInitializer {
     public static final String MOD_ID = "clones_on_phisics";
     public static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
 
-    // Храним созданных клонов и оставшееся время жизни в тиках (20 тиков = 1 секунда)
     private static final Map<UUID, Integer> ACTIVE_CLONES = new ConcurrentHashMap<>();
 
     @Override
@@ -45,7 +47,7 @@ public class Clones_on_phisics implements ModInitializer {
             CommandManager.literal("spawnclone")
                 .executes(context -> {
                     ServerCommandSource source = context.getSource();
-                    if (!(source.getEntity() instanceof net.minecraft.server.network.ServerPlayerEntity player)) {
+                    if (!(source.getEntity() instanceof ServerPlayerEntity player)) {
                         source.sendFeedback(() -> Text.literal("Команду может вызвать только игрок!"), false);
                         return 0;
                     }
@@ -63,13 +65,12 @@ public class Clones_on_phisics implements ModInitializer {
                         player.getYaw(),
                         player.getPitch()
                     );
-                    // Даём клону лёгкий импульс вперёд, чтобы сразу чувствовалась физика
                     clone.setVelocity(look.x * 0.35, 0.15, look.z * 0.35);
                     clone.setCustomName(Text.literal("Клон " + player.getName().getString()));
                     clone.setCustomNameVisible(true);
 
                     world.spawnEntity(clone);
-                    ACTIVE_CLONES.put(clone.getUuid(), 100); // живёт 5 секунд (100 тиков)
+                    ACTIVE_CLONES.put(clone.getUuid(), 100);
 
                     world.spawnParticles(
                         ParticleTypes.CLOUD,
@@ -89,7 +90,7 @@ public class Clones_on_phisics implements ModInitializer {
         );
     }
 
-    private void onServerTick(net.minecraft.server.MinecraftServer server) {
+    private void onServerTick(MinecraftServer server) {
         Iterator> iterator = ACTIVE_CLONES.entrySet().iterator();
         while (iterator.hasNext()) {
             Map.Entry<UUID, Integer> entry = iterator.next();
@@ -97,7 +98,7 @@ public class Clones_on_phisics implements ModInitializer {
 
             if (ticksLeft <= 0) {
                 for (ServerWorld world : server.getWorlds()) {
-                    var entity = world.getEntity(entry.getKey());
+                    Entity entity = world.getEntity(entry.getKey());
                     if (entity != null) {
                         world.spawnParticles(
                             ParticleTypes.POOF,
