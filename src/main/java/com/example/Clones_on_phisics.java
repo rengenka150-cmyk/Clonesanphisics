@@ -1,9 +1,15 @@
 package com.example;
 
 import com.mojang.brigadier.CommandDispatcher;
+import net.fabricmc.api.EnvType;
+import net.fabricmc.api.Environment;
 import net.fabricmc.api.ModInitializer;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
+import net.minecraft.client.KeyMapping;
+import net.minecraft.client.Minecraft;
 import net.minecraft.commands.CommandBuildContext;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
@@ -16,6 +22,7 @@ import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.decoration.ArmorStand;
 import net.minecraft.world.phys.Vec3;
+import org.lwjgl.glfw.GLFW;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -31,11 +38,35 @@ public class Clones_on_phisics implements ModInitializer {
 
     private static final Map<UUID, Integer> ACTIVE_CLONES = new HashMap<>();
 
+    @Environment(EnvType.CLIENT)
+    private static KeyMapping spawnCloneKey;
+
     @Override
     public void onInitialize() {
         LOGGER.info("Clones on Physics loaded!");
         CommandRegistrationCallback.EVENT.register(this::registerCommands);
         ServerTickEvents.END_SERVER_TICK.register(this::onServerTick);
+
+        if (Minecraft.getInstance() != null) {
+            registerClientKeybind();
+        }
+    }
+
+    @Environment(EnvType.CLIENT)
+    private void registerClientKeybind() {
+        spawnCloneKey = KeyBindingHelper.registerKeyBinding(new KeyMapping(
+                "key.clones_on_phisics.spawn_clone",
+                GLFW.GLFW_KEY_R,
+                "category.clones_on_phisics.main"
+        ));
+
+        ClientTickEvents.END_CLIENT_TICK.register(client -> {
+            while (spawnCloneKey.consumeClick()) {
+                if (client.player != null && client.player.connection != null) {
+                    client.player.connection.sendCommand("spawnclone");
+                }
+            }
+        });
     }
 
     private void registerCommands(
