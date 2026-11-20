@@ -12,6 +12,9 @@
   "entrypoints": {
     "main": [
       "com.example.Clones_on_phisics"
+    ],
+    "client": [
+      "com.example.Clones_on_phisicsClient"
     ]
   },
   "depends": {
