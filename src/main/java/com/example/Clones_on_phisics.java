@@ -4,16 +4,18 @@ import com.mojang.brigadier.CommandDispatcher;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
-import net.minecraft.command.CommandRegistryAccess;
-import net.minecraft.entity.EntityType;
-import net.minecraft.entity.mob.ArmorStandEntity;
-import net.minecraft.particle.ParticleTypes;
+import net.minecraft.commands.CommandBuildContext;
+import net.minecraft.commands.CommandSourceStack;
+import net.minecraft.commands.Commands;
+import net.minecraft.core.particles.ParticleTypes;
+import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.command.CommandManager;
-import net.minecraft.server.command.ServerCommandSource;
-import net.minecraft.server.network.ServerPlayerEntity;
-import net.minecraft.text.Text;
-import net.minecraft.util.math.Vec3d;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.decoration.ArmorStand;
+import net.minecraft.world.phys.Vec3;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -37,35 +39,35 @@ public class Clones_on_phisics implements ModInitializer {
     }
 
     private void registerCommands(
-            CommandDispatcher<ServerCommandSource> dispatcher,
-            CommandRegistryAccess registryAccess,
-            CommandManager.RegistrationEnvironment environment
+            CommandDispatcher<CommandSourceStack> dispatcher,
+            CommandBuildContext registryAccess,
+            Commands.CommandSelection environment
     ) {
         dispatcher.register(
-            CommandManager.literal("spawnclone")
+            Commands.literal("spawnclone")
                 .executes(context -> {
-                    ServerCommandSource source = context.getSource();
-                    if (!(source.getEntity() instanceof ServerPlayerEntity player)) {
-                        source.sendFeedback(() -> Text.literal("Только игрок!"), false);
+                    CommandSourceStack source = context.getSource();
+                    if (!(source.getEntity() instanceof ServerPlayer player)) {
+                        source.sendFailure(Component.literal("Только игрок!"));
                         return 0;
                     }
 
-                    var world = player.getServerWorld();
-                    var clone = new ArmorStandEntity(EntityType.ARMOR_STAND, world);
+                    ServerLevel level = player.level();
+                    ArmorStand clone = new ArmorStand(EntityType.ARMOR_STAND, level);
 
-                    Vec3d look = player.getRotationVec(1.0f);
-                    Vec3d pos = player.getPos().add(look.x * 1.5, 0.0, look.z * 1.5);
+                    Vec3 look = player.getLookAngle();
+                    Vec3 pos = player.position().add(look.x * 1.5, 0.0, look.z * 1.5);
 
-                    clone.refreshPositionAndAngles(pos.x, pos.y, pos.z, player.getYaw(), player.getPitch());
-                    clone.setVelocity(look.x * 0.35, 0.15, look.z * 0.35);
-                    clone.setCustomName(Text.literal("Клон " + player.getName().getString()));
+                    clone.snapTo(pos.x, pos.y, pos.z, player.getYRot(), player.getXRot());
+                    clone.setDeltaMovement(look.x * 0.35, 0.15, look.z * 0.35);
+                    clone.setCustomName(Component.literal("Клон " + player.getName().getString()));
                     clone.setCustomNameVisible(true);
 
-                    world.spawnEntity(clone);
-                    ACTIVE_CLONES.put(clone.getUuid(), 100);
+                    level.addFreshEntity(clone);
+                    ACTIVE_CLONES.put(clone.getUUID(), 100);
 
-                    world.spawnParticles(ParticleTypes.CLOUD, pos.x, pos.y + 1.0, pos.z, 15, 0.3, 0.5, 0.3, 0.02);
-                    source.sendFeedback(() -> Text.literal("Клон создан!"), false);
+                    level.sendParticles(ParticleTypes.CLOUD, pos.x, pos.y + 1.0, pos.z, 15, 0.3, 0.5, 0.3, 0.02);
+                    source.sendSuccess(() -> Component.literal("Клон создан!"), false);
                     return 1;
                 })
         );
@@ -78,10 +80,10 @@ public class Clones_on_phisics implements ModInitializer {
         for (UUID id : ids) {
             int ticks = ACTIVE_CLONES.getOrDefault(id, 0) - 1;
             if (ticks <= 0) {
-                for (var world : server.getWorlds()) {
-                    var entity = world.getEntity(id);
+                for (ServerLevel level : server.getAllLevels()) {
+                    Entity entity = level.getEntity(id);
                     if (entity != null) {
-                        world.spawnParticles(ParticleTypes.POOF, entity.getX(), entity.getY() + 1.0, entity.getZ(), 10, 0.25, 0.4, 0.25, 0.02);
+                        level.sendParticles(ParticleTypes.POOF, entity.getX(), entity.getY() + 1.0, entity.getZ(), 10, 0.25, 0.4, 0.25, 0.02);
                         entity.discard();
                     }
                 }
