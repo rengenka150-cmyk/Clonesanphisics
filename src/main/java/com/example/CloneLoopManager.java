@@ -96,7 +96,9 @@ public class CloneLoopManager {
         }
         CloneNpcEntity clone = new CloneNpcEntity(EntityType.VILLAGER, level);
         clone.setPos(player.getX(), player.getY(), player.getZ());
-        clone.setRot(player.getYRot(), player.getXRot());
+        clone.setYRot(player.getYRot());
+        clone.setXRot(player.getXRot());
+
         level.addFreshEntity(clone);
         SPAWNED_CLONES.add(clone);
         return clone;
