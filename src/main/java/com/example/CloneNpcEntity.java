@@ -2,22 +2,20 @@ package com.example;
 
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
-import net.minecraft.world.InteractionHand;
-import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.LivingEntity;
-import net.minecraft.world.entity.npc.Villager;
+import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.Vec3;
 
 import java.util.List;
 
-public class CloneNpcEntity extends Villager {
+public class CloneNpcEntity extends Mob {
     private int playbackIndex = 0;
 
-    public CloneNpcEntity(EntityType<? extends Villager> entityType, Level level) {
+    public CloneNpcEntity(EntityType<? extends Mob> entityType, Level level) {
         super(entityType, level);
         this.setCustomName(Component.literal("Клон"));
         this.setCustomNameVisible(true);
@@ -29,11 +27,6 @@ public class CloneNpcEntity extends Villager {
 
     @Override
     protected void registerGoals() {
-    }
-
-    @Override
-    public InteractionResult mobInteract(Player player, InteractionHand hand) {
-        return InteractionResult.PASS;
     }
 
     @Override
