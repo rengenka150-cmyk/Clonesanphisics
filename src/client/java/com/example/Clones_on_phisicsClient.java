@@ -17,6 +17,8 @@ public class Clones_on_phisicsClient implements ClientModInitializer {
     private static final int MIN_AIR_TICKS_BEFORE_AIR_JUMP = 3;
     private static final int SLIDE_DURATION_TICKS = 14;
     private static final int SLIDE_COOLDOWN_TICKS = 20;
+    private static final int MAX_WALL_CLIMB_TICKS = 30; // ~1.5 секунды карабкания вверх
+    private static final double WALL_SLIDE_MAX_FALL_SPEED = -0.08; // Скорость медленного спуска на Shift
 
     private static KeyMapping spawnCloneKey;
     private static KeyMapping slideKey;
@@ -28,6 +30,8 @@ public class Clones_on_phisicsClient implements ClientModInitializer {
     private int slideTicks = 0;
     private int slideCooldown = 0;
     private Vec3 slideDirection = Vec3.ZERO;
+
+    private int wallClimbTicks = 0;
 
     @Override
     public void onInitializeClient() {
@@ -52,38 +56,68 @@ public class Clones_on_phisicsClient implements ClientModInitializer {
                 }
             }
 
-            handleMultiJump(client);
+            handleMultiJumpAndWallMechanics(client);
             handleSlide(client);
         });
     }
 
-    private void handleMultiJump(Minecraft client) {
+    private void handleMultiJumpAndWallMechanics(Minecraft client) {
         LocalPlayer player = client.player;
         if (player == null) {
             airJumpsUsed = 0;
             ticksInAir = 0;
+            wallClimbTicks = 0;
             jumpWasDown = false;
             return;
         }
 
         boolean jumpDown = client.options.keyJump.isDown();
+        boolean shiftDown = client.options.keyShift.isDown();
         boolean jumpJustPressed = jumpDown && !jumpWasDown;
         jumpWasDown = jumpDown;
 
         if (player.onGround() || player.isInWater() || player.onClimbable()) {
             airJumpsUsed = 0;
             ticksInAir = 0;
-            player.fallDistance = 0.0f;
+            wallClimbTicks = 0;
             return;
         }
 
         ticksInAir++;
-        player.fallDistance = 0.0f;
+        Vec3 vel = player.getDeltaMovement();
 
+        // 1. Медленный спуск по стене при зажатом Shift
+        if (player.horizontalCollision && shiftDown && vel.y < 0.0) {
+            double clampedY = Math.max(vel.y, WALL_SLIDE_MAX_FALL_SPEED);
+            player.setDeltaMovement(vel.x, clampedY, vel.z);
+            player.fallDistance = 0.0f;
+
+            if (client.level != null && ticksInAir % 3 == 0) {
+                client.level.addParticle(
+                        ParticleTypes.CLOUD,
+                        player.getX(),
+                        player.getY() + 0.5,
+                        player.getZ(),
+                        0.0,
+                        0.01,
+                        0.0
+                );
+            }
+            return;
+        }
+
+        // 2. Лазание по стене вверх: упёрся в стену в воздухе и держишь прыжок
+        if (player.horizontalCollision && jumpDown && wallClimbTicks < MAX_WALL_CLIMB_TICKS) {
+            wallClimbTicks++;
+            player.setDeltaMovement(vel.x, 0.22, vel.z);
+            player.fallDistance = 0.0f;
+            return;
+        }
+
+        // 3. Воздушные прыжки
         if (jumpJustPressed && ticksInAir >= MIN_AIR_TICKS_BEFORE_AIR_JUMP && airJumpsUsed < MAX_AIR_JUMPS) {
             airJumpsUsed++;
 
-            Vec3 vel = player.getDeltaMovement();
             double jumpVelocity = Math.max(vel.y, 0.46);
             player.setDeltaMovement(vel.x, jumpVelocity, vel.z);
             player.fallDistance = 0.0f;
