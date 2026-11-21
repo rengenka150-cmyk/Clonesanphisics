@@ -21,48 +21,44 @@ public class CloneControlScreen extends Screen {
         int btnHeight = 20;
         int spacing = 25;
 
-        // 1. Кнопка записи цикла (REC)
         this.addRenderableWidget(Button.builder(
                 Component.literal(isRecording ? "● Запись: ВКЛ (нажми Стоп)" : "● Начать запись лупа"),
                 button -> {
                     isRecording = !isRecording;
                     if (isRecording) {
                         isPlaying = false;
-                        sendCommand("clone rec");
+                        sendCommand("cloop rec");
                     } else {
-                        sendCommand("clone stop");
+                        sendCommand("cloop stop");
                     }
                     this.rebuildWidgets();
                 }
         ).bounds(centerX - btnWidth / 2, startY, btnWidth, btnHeight).build());
 
-        // 2. Кнопка Плей / Пауза
         this.addRenderableWidget(Button.builder(
                 Component.literal(isPlaying ? "❚❚ Пауза лупа" : "▶ Плей (Запустить луп)"),
                 button -> {
                     isPlaying = !isPlaying;
                     if (isPlaying) {
                         isRecording = false;
-                        sendCommand("clone play");
+                        sendCommand("cloop play");
                     } else {
-                        sendCommand("clone pause");
+                        sendCommand("cloop pause");
                     }
                     this.rebuildWidgets();
                 }
         ).bounds(centerX - btnWidth / 2, startY + spacing, btnWidth, btnHeight).build());
 
-        // 3. Кнопка Стоп (сброс в начало)
         this.addRenderableWidget(Button.builder(
                 Component.literal("■ Стоп и сброс"),
                 button -> {
                     isRecording = false;
                     isPlaying = false;
-                    sendCommand("clone stop");
+                    sendCommand("cloop stop");
                     this.rebuildWidgets();
                 }
         ).bounds(centerX - btnWidth / 2, startY + spacing * 2, btnWidth, btnHeight).build());
 
-        // 4. Спавн клона
         this.addRenderableWidget(Button.builder(
                 Component.literal("+ Спавн клона"),
                 button -> {
@@ -71,13 +67,12 @@ public class CloneControlScreen extends Screen {
                 }
         ).bounds(centerX - btnWidth / 2, startY + spacing * 3, btnWidth, btnHeight).build());
 
-        // 5. Очистить всех клонов
         this.addRenderableWidget(Button.builder(
                 Component.literal("✖ Удалить всех клонов"),
                 button -> {
                     isRecording = false;
                     isPlaying = false;
-                    sendCommand("clone clear");
+                    sendCommand("cloop clear");
                     this.rebuildWidgets();
                 }
         ).bounds(centerX - btnWidth / 2, startY + spacing * 4, btnWidth, btnHeight).build());
@@ -101,6 +96,6 @@ public class CloneControlScreen extends Screen {
 
     @Override
     public boolean isPauseScreen() {
-        return false; // Игра не ставится на паузу, пока открыто меню!
+        return false;
     }
 }
