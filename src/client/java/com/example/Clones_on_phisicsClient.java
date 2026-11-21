@@ -60,7 +60,6 @@ public class Clones_on_phisicsClient implements ClientModInitializer {
             Vec3 vel = player.getDeltaMovement();
             double jumpVelocity = Math.max(vel.y, 0.46);
             player.setDeltaMovement(vel.x, jumpVelocity, vel.z);
-            player.hasImpulse = true;
             player.fallDistance = 0.0f;
 
             if (client.level != null) {
