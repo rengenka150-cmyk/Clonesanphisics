@@ -28,12 +28,13 @@ public class Clones_on_phisicsClient implements ClientModInitializer {
 
     private static final double ROPE_MAX_DISTANCE = 26.0;
     private static final int HOOK_MAX_HOLD_TICKS = 45;
-    private static final int HOOK_END_HOLD_TICKS = 6; // Короткое удержание дистанции у цели (~0.3 сек)
+    private static final int HOOK_END_HOLD_TICKS = 6;
     private static final double HOOK_TOP_OFFSET_Y = 1.6;
     private static final int SWING_MAX_HOLD_TICKS = 160;
     private static final int ROPE_COOLDOWN_TICKS = 8;
 
     private static KeyMapping spawnCloneKey;
+    private static KeyMapping cloneMenuKey;
     private static KeyMapping slideKey;
     private static KeyMapping hookPullKey;
     private static KeyMapping webSwingKey;
@@ -70,6 +71,13 @@ public class Clones_on_phisicsClient implements ClientModInitializer {
                 KeyMapping.Category.GAMEPLAY
         ));
 
+        cloneMenuKey = KeyBindingHelper.registerKeyBinding(new KeyMapping(
+                "key.clones_on_phisics.clone_menu",
+                InputConstants.Type.KEYSYM,
+                GLFW.GLFW_KEY_G,
+                KeyMapping.Category.GAMEPLAY
+        ));
+
         slideKey = KeyBindingHelper.registerKeyBinding(new KeyMapping(
                 "key.clones_on_phisics.slide",
                 InputConstants.Type.KEYSYM,
@@ -95,6 +103,12 @@ public class Clones_on_phisicsClient implements ClientModInitializer {
             while (spawnCloneKey.consumeClick()) {
                 if (client.player != null && client.player.connection != null) {
                     client.player.connection.sendCommand("spawnclone");
+                }
+            }
+
+            while (cloneMenuKey.consumeClick()) {
+                if (client.player != null && client.screen == null) {
+                    client.setScreen(new CloneControlScreen());
                 }
             }
 
@@ -174,7 +188,6 @@ public class Clones_on_phisicsClient implements ClientModInitializer {
         boolean hookDown = hookPullKey.isDown();
         boolean swingDown = webSwingKey.isDown();
 
-        // 1. ХУК-ПУШКА: тянет к точке сверху блока, затем коротко держит дистанцию и отпускает
         if (!hookActive && !swingActive && hookDown && ropeCooldown == 0) {
             Vec3 hitPos = raycastBlock(client, player, ROPE_MAX_DISTANCE);
             if (hitPos != null) {
@@ -236,7 +249,6 @@ public class Clones_on_phisicsClient implements ClientModInitializer {
             }
         }
 
-        // 2. ПАУТИНА-МАЯТНИК: дольше держит и сохраняет длину верёвки
         if (!swingActive && !hookActive && swingDown && ropeCooldown == 0) {
             Vec3 hitPos = raycastBlock(client, player, ROPE_MAX_DISTANCE);
             if (hitPos != null) {
