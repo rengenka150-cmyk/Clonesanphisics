@@ -22,13 +22,15 @@ public class Clones_on_phisicsClient implements ClientModInitializer {
     private static final int SLIDE_DURATION_TICKS = 14;
     private static final int SLIDE_COOLDOWN_TICKS = 20;
 
-    private static final int MAX_WALL_CLIMB_TICKS = 35;
-    private static final double WALL_CLIMB_SPEED = 0.14;
+    private static final int MAX_WALL_CLIMB_TICKS = 42;
+    private static final double WALL_CLIMB_SPEED = 0.21;
     private static final double WALL_SLIDE_MAX_FALL_SPEED = -0.08;
 
     private static final double ROPE_MAX_DISTANCE = 26.0;
-    private static final int HOOK_MAX_HOLD_TICKS = 35;
-    private static final int SWING_MAX_HOLD_TICKS = 80;
+    private static final int HOOK_MAX_HOLD_TICKS = 45;
+    private static final int HOOK_END_HOLD_TICKS = 6; // Короткое удержание дистанции у цели (~0.3 сек)
+    private static final double HOOK_TOP_OFFSET_Y = 1.6;
+    private static final int SWING_MAX_HOLD_TICKS = 160;
     private static final int ROPE_COOLDOWN_TICKS = 8;
 
     private static KeyMapping spawnCloneKey;
@@ -49,6 +51,8 @@ public class Clones_on_phisicsClient implements ClientModInitializer {
     private boolean hookActive = false;
     private Vec3 hookAnchor = null;
     private int hookHoldTicks = 0;
+    private int hookEndHoldRemaining = 0;
+    private double hookHoldLength = 0.0;
 
     private boolean swingActive = false;
     private Vec3 swingAnchor = null;
@@ -107,6 +111,21 @@ public class Clones_on_phisicsClient implements ClientModInitializer {
         }
     }
 
+    private void resetHookState() {
+        hookActive = false;
+        hookAnchor = null;
+        hookHoldTicks = 0;
+        hookEndHoldRemaining = 0;
+        hookHoldLength = 0.0;
+    }
+
+    private void resetSwingState() {
+        swingActive = false;
+        swingAnchor = null;
+        swingRopeLength = 0.0;
+        swingHoldTicks = 0;
+    }
+
     private Vec3 raycastBlock(Minecraft client, LocalPlayer player, double maxDistance) {
         if (client.level == null) {
             return null;
@@ -142,12 +161,8 @@ public class Clones_on_phisicsClient implements ClientModInitializer {
     private void handleRopes(Minecraft client) {
         LocalPlayer player = client.player;
         if (player == null || client.level == null) {
-            hookActive = false;
-            hookAnchor = null;
-            hookHoldTicks = 0;
-            swingActive = false;
-            swingAnchor = null;
-            swingHoldTicks = 0;
+            resetHookState();
+            resetSwingState();
             ropeCooldown = 0;
             return;
         }
@@ -159,20 +174,24 @@ public class Clones_on_phisicsClient implements ClientModInitializer {
         boolean hookDown = hookPullKey.isDown();
         boolean swingDown = webSwingKey.isDown();
 
+        // 1. ХУК-ПУШКА: тянет к точке сверху блока, затем коротко держит дистанцию и отпускает
         if (!hookActive && !swingActive && hookDown && ropeCooldown == 0) {
             Vec3 hitPos = raycastBlock(client, player, ROPE_MAX_DISTANCE);
             if (hitPos != null) {
-                hookAnchor = hitPos;
+                hookAnchor = hitPos.add(0.0, HOOK_TOP_OFFSET_Y, 0.0);
                 hookActive = true;
                 hookHoldTicks = 0;
+                hookEndHoldRemaining = 0;
+                hookHoldLength = 0.0;
             }
         }
 
         if (hookActive) {
-            if (!hookDown || hookHoldTicks >= HOOK_MAX_HOLD_TICKS || hookAnchor == null) {
-                hookActive = false;
-                hookAnchor = null;
-                hookHoldTicks = 0;
+            boolean expiredBeforeEndHold = hookEndHoldRemaining == 0 && hookHoldTicks >= HOOK_MAX_HOLD_TICKS;
+            boolean expiredEndHold = hookEndHoldRemaining > 0 && hookEndHoldRemaining <= 1;
+
+            if (!hookDown || hookAnchor == null || expiredBeforeEndHold || expiredEndHold) {
+                resetHookState();
                 ropeCooldown = ROPE_COOLDOWN_TICKS;
             } else {
                 hookHoldTicks++;
@@ -180,26 +199,44 @@ public class Clones_on_phisicsClient implements ClientModInitializer {
                 Vec3 toAnchor = hookAnchor.subtract(playerCenter);
                 double distance = toAnchor.length();
 
-                if (distance > 1.3) {
+                if (hookEndHoldRemaining == 0 && distance > 1.65) {
                     Vec3 dir = toAnchor.normalize();
-                    Vec3 nextVel = player.getDeltaMovement().add(dir.scale(0.15));
-                    if (nextVel.length() > 1.15) {
-                        nextVel = nextVel.normalize().scale(1.15);
+                    Vec3 nextVel = player.getDeltaMovement().add(dir.scale(0.165));
+                    if (nextVel.length() > 1.2) {
+                        nextVel = nextVel.normalize().scale(1.2);
                     }
-                    player.setDeltaMovement(nextVel.x, nextVel.y + 0.03, nextVel.z);
-                    resetServerFallDistance(player);
-                    airJumpsUsed = 0;
-                    wallClimbTicks = 0;
-                    drawRopeParticles(client, playerCenter, hookAnchor);
+                    double liftBoost = distance < 4.5 ? 0.075 : 0.04;
+                    player.setDeltaMovement(nextVel.x, nextVel.y + liftBoost, nextVel.z);
                 } else {
-                    hookActive = false;
-                    hookAnchor = null;
-                    hookHoldTicks = 0;
-                    ropeCooldown = ROPE_COOLDOWN_TICKS;
+                    if (hookEndHoldRemaining == 0) {
+                        hookEndHoldRemaining = HOOK_END_HOLD_TICKS;
+                        hookHoldLength = Math.max(distance, 1.1);
+                    } else {
+                        hookEndHoldRemaining--;
+                    }
+
+                    Vec3 vel = player.getDeltaMovement().scale(0.65);
+                    if (distance > hookHoldLength && distance > 0.001) {
+                        Vec3 fromAnchor = playerCenter.subtract(hookAnchor);
+                        Vec3 radialDir = fromAnchor.normalize();
+                        double radialSpeed = vel.dot(radialDir);
+                        if (radialSpeed > 0.0) {
+                            vel = vel.subtract(radialDir.scale(radialSpeed));
+                        }
+                        double stretch = distance - hookHoldLength;
+                        vel = vel.subtract(radialDir.scale(Math.min(stretch * 0.35, 0.3)));
+                    }
+                    player.setDeltaMovement(vel);
                 }
+
+                resetServerFallDistance(player);
+                airJumpsUsed = 0;
+                wallClimbTicks = 0;
+                drawRopeParticles(client, playerCenter, hookAnchor);
             }
         }
 
+        // 2. ПАУТИНА-МАЯТНИК: дольше держит и сохраняет длину верёвки
         if (!swingActive && !hookActive && swingDown && ropeCooldown == 0) {
             Vec3 hitPos = raycastBlock(client, player, ROPE_MAX_DISTANCE);
             if (hitPos != null) {
@@ -216,9 +253,7 @@ public class Clones_on_phisicsClient implements ClientModInitializer {
 
         if (swingActive) {
             if (!swingDown || swingHoldTicks >= SWING_MAX_HOLD_TICKS || swingAnchor == null) {
-                swingActive = false;
-                swingAnchor = null;
-                swingHoldTicks = 0;
+                resetSwingState();
                 ropeCooldown = ROPE_COOLDOWN_TICKS;
             } else {
                 swingHoldTicks++;
@@ -303,7 +338,16 @@ public class Clones_on_phisicsClient implements ClientModInitializer {
 
         if (player.horizontalCollision && jumpDown && wallClimbTicks < MAX_WALL_CLIMB_TICKS) {
             wallClimbTicks++;
-            player.setDeltaMovement(vel.x, WALL_CLIMB_SPEED, vel.z);
+            Vec3 look = player.getLookAngle();
+            Vec3 flatLook = new Vec3(look.x, 0.0, look.z);
+            double pushX = vel.x;
+            double pushZ = vel.z;
+            if (flatLook.lengthSqr() > 1.0E-4) {
+                Vec3 dir = flatLook.normalize();
+                pushX += dir.x * 0.04;
+                pushZ += dir.z * 0.04;
+            }
+            player.setDeltaMovement(pushX, WALL_CLIMB_SPEED, pushZ);
             player.fallDistance = 0.0f;
             if (wallClimbTicks % 4 == 0) {
                 resetServerFallDistance(player);
