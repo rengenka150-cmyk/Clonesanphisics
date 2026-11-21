@@ -4,6 +4,7 @@ import com.mojang.blaze3d.platform.InputConstants;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
+import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.LocalPlayer;
@@ -20,16 +21,20 @@ public class Clones_on_phisicsClient implements ClientModInitializer {
     private static final int MIN_AIR_TICKS_BEFORE_AIR_JUMP = 3;
     private static final int SLIDE_DURATION_TICKS = 14;
     private static final int SLIDE_COOLDOWN_TICKS = 20;
-    private static final int MAX_WALL_CLIMB_TICKS = 30;
+
+    private static final int MAX_WALL_CLIMB_TICKS = 35;
+    private static final double WALL_CLIMB_SPEED = 0.14;
     private static final double WALL_SLIDE_MAX_FALL_SPEED = -0.08;
 
-    private static final double ROPE_MAX_DISTANCE = 24.0;
-    private static final int ROPE_MAX_HOLD_TICKS = 35; // ~1.75 сек удержания верёвки за один зацеп
-    private static final int ROPE_COOLDOWN_TICKS = 10;
+    private static final double ROPE_MAX_DISTANCE = 26.0;
+    private static final int HOOK_MAX_HOLD_TICKS = 35;
+    private static final int SWING_MAX_HOLD_TICKS = 80;
+    private static final int ROPE_COOLDOWN_TICKS = 8;
 
     private static KeyMapping spawnCloneKey;
     private static KeyMapping slideKey;
-    private static KeyMapping grappleKey;
+    private static KeyMapping hookPullKey;
+    private static KeyMapping webSwingKey;
 
     private int airJumpsUsed = 0;
     private int ticksInAir = 0;
@@ -41,9 +46,15 @@ public class Clones_on_phisicsClient implements ClientModInitializer {
 
     private int wallClimbTicks = 0;
 
-    private boolean ropeActive = false;
-    private Vec3 ropeAnchor = null;
-    private int ropeHoldTicks = 0;
+    private boolean hookActive = false;
+    private Vec3 hookAnchor = null;
+    private int hookHoldTicks = 0;
+
+    private boolean swingActive = false;
+    private Vec3 swingAnchor = null;
+    private double swingRopeLength = 0.0;
+    private int swingHoldTicks = 0;
+
     private int ropeCooldown = 0;
 
     @Override
@@ -62,8 +73,15 @@ public class Clones_on_phisicsClient implements ClientModInitializer {
                 KeyMapping.Category.MOVEMENT
         ));
 
-        grappleKey = KeyBindingHelper.registerKeyBinding(new KeyMapping(
-                "key.clones_on_phisics.grapple",
+        hookPullKey = KeyBindingHelper.registerKeyBinding(new KeyMapping(
+                "key.clones_on_phisics.hook_pull",
+                InputConstants.Type.KEYSYM,
+                InputConstants.UNKNOWN.getValue(),
+                KeyMapping.Category.MOVEMENT
+        ));
+
+        webSwingKey = KeyBindingHelper.registerKeyBinding(new KeyMapping(
+                "key.clones_on_phisics.web_swing",
                 InputConstants.Type.KEYSYM,
                 InputConstants.UNKNOWN.getValue(),
                 KeyMapping.Category.MOVEMENT
@@ -76,16 +94,56 @@ public class Clones_on_phisicsClient implements ClientModInitializer {
                 }
             }
 
-            handleGrappleRope(client);
+            handleRopes(client);
             handleMultiJumpAndWallMechanics(client);
             handleSlide(client);
         });
     }
 
-    private void handleGrappleRope(Minecraft client) {
+    private void resetServerFallDistance(LocalPlayer player) {
+        player.fallDistance = 0.0f;
+        if (ClientPlayNetworking.canSend(ResetFallPayload.TYPE)) {
+            ClientPlayNetworking.send(new ResetFallPayload());
+        }
+    }
+
+    private Vec3 raycastBlock(Minecraft client, LocalPlayer player, double maxDistance) {
+        if (client.level == null) return null;
+        Vec3 eyePos = player.getEyePosition(1.0f);
+        Vec3 lookVec = player.getLookAngle();
+        Vec3 endPos = eyePos.add(lookVec.scale(maxDistance));
+
+        BlockHitResult hit = client.level.clip(new ClipContext(
+                eyePos,
+                endPos,
+                ClipContext.Block.COLLIDER,
+                ClipContext.Fluid.NONE,
+                player
+        ));
+
+        return hit.getType() == HitResult.Type.BLOCK ? hit.getLocation() : null;
+    }
+
+    private void drawRopeParticles(Minecraft client, Vec3 from, Vec3 to) {
+        if (client.level == null) return;
+        double distance = from.distanceTo(to);
+        int steps = Math.min((int) (distance * 2.5), 45);
+        for (int i = 1; i <= steps; i++) {
+            double t = (double) i / (steps + 1);
+            Vec3 p = from.lerp(to, t);
+            client.level.addParticle(ParticleTypes.CRIT, p.x, p.y, p.z, 0.0, 0.0, 0.0);
+        }
+    }
+
+    private void handleRopes(Minecraft client) {
         LocalPlayer player = client.player;
         if (player == null || client.level == null) {
-            releaseRope();
+            hookActive = false;
+            hookAnchor = null;
+            hookHoldTicks = 0;
+            swingActive = false;
+            swingAnchor = null;
+            swingHoldTicks = 0;
             ropeCooldown = 0;
             return;
         }
@@ -94,87 +152,101 @@ public class Clones_on_phisicsClient implements ClientModInitializer {
             ropeCooldown--;
         }
 
-        boolean grappleDown = grappleKey.isDown();
+        boolean hookDown = hookPullKey.isDown();
+        boolean swingDown = webSwingKey.isDown();
 
-        if (!ropeActive && grappleDown && ropeCooldown == 0) {
-            Vec3 eyePos = player.getEyePosition(1.0f);
-            Vec3 lookVec = player.getLookAngle();
-            Vec3 endPos = eyePos.add(lookVec.scale(ROPE_MAX_DISTANCE));
-
-            BlockHitResult hit = client.level.clip(new ClipContext(
-                    eyePos,
-                    endPos,
-                    ClipContext.Block.COLLIDER,
-                    ClipContext.Fluid.NONE,
-                    player
-            ));
-
-            if (hit.getType() == HitResult.Type.BLOCK) {
-                ropeAnchor = hit.getLocation();
-                ropeActive = true;
-                ropeHoldTicks = 0;
+        if (!hookActive && !swingActive && hookDown && ropeCooldown == 0) {
+            Vec3 hitPos = raycastBlock(client, player, ROPE_MAX_DISTANCE);
+            if (hitPos != null) {
+                hookAnchor = hitPos;
+                hookActive = true;
+                hookHoldTicks = 0;
             }
         }
 
-        if (ropeActive) {
-            if (!grappleDown || ropeHoldTicks >= ROPE_MAX_HOLD_TICKS || ropeAnchor == null) {
-                releaseRope();
+        if (hookActive) {
+            if (!hookDown || hookHoldTicks >= HOOK_MAX_HOLD_TICKS || hookAnchor == null) {
+                hookActive = false;
+                hookAnchor = null;
+                hookHoldTicks = 0;
                 ropeCooldown = ROPE_COOLDOWN_TICKS;
-                return;
+            } else {
+                hookHoldTicks++;
+                Vec3 playerCenter = player.position().add(0.0, player.getBbHeight() * 0.6, 0.0);
+                Vec3 toAnchor = hookAnchor.subtract(playerCenter);
+                double distance = toAnchor.length();
+
+                if (distance > 1.3) {
+                    Vec3 dir = toAnchor.normalize();
+                    Vec3 nextVel = player.getDeltaMovement().add(dir.scale(0.15));
+                    if (nextVel.length() > 1.15) {
+                        nextVel = nextVel.normalize().scale(1.15);
+                    }
+                    player.setDeltaMovement(nextVel.x, nextVel.y + 0.03, nextVel.z);
+                    resetServerFallDistance(player);
+                    airJumpsUsed = 0;
+                    wallClimbTicks = 0;
+                    drawRopeParticles(client, playerCenter, hookAnchor);
+                } else {
+                    hookActive = false;
+                    hookAnchor = null;
+                    hookHoldTicks = 0;
+                    ropeCooldown = ROPE_COOLDOWN_TICKS;
+                }
             }
+        }
 
-            ropeHoldTicks++;
-            Vec3 playerCenter = player.position().add(0.0, player.getBbHeight() * 0.6, 0.0);
-            Vec3 toAnchor = ropeAnchor.subtract(playerCenter);
-            double distance = toAnchor.length();
+        if (!swingActive && !hookActive && swingDown && ropeCooldown == 0) {
+            Vec3 hitPos = raycastBlock(client, player, ROPE_MAX_DISTANCE);
+            if (hitPos != null) {
+                Vec3 playerCenter = player.position().add(0.0, player.getBbHeight() * 0.6, 0.0);
+                double initialDist = playerCenter.distanceTo(hitPos);
+                if (initialDist > 2.0) {
+                    swingAnchor = hitPos;
+                    swingRopeLength = initialDist;
+                    swingActive = true;
+                    swingHoldTicks = 0;
+                }
+            }
+        }
 
-            if (distance > 1.2) {
-                Vec3 dir = toAnchor.normalize();
+        if (swingActive) {
+            if (!swingDown || swingHoldTicks >= SWING_MAX_HOLD_TICKS || swingAnchor == null) {
+                swingActive = false;
+                swingAnchor = null;
+                swingHoldTicks = 0;
+                ropeCooldown = ROPE_COOLDOWN_TICKS;
+            } else {
+                swingHoldTicks++;
+                Vec3 playerCenter = player.position().add(0.0, player.getBbHeight() * 0.6, 0.0);
+                Vec3 fromAnchor = playerCenter.subtract(swingAnchor);
+                double currentDist = fromAnchor.length();
+
                 Vec3 vel = player.getDeltaMovement();
 
-                // Тяга к точке крепления + лёгкий подъём для полёта дугой
-                double pullStrength = 0.14;
-                Vec3 nextVel = vel.add(dir.scale(pullStrength));
-
-                // Ограничиваем максимальную скорость полёта на верёвке
-                double maxSpeed = 1.15;
-                if (nextVel.length() > maxSpeed) {
-                    nextVel = nextVel.normalize().scale(maxSpeed);
+                Vec3 look = player.getLookAngle();
+                Vec3 flatLook = new Vec3(look.x, 0.0, look.z);
+                if (flatLook.lengthSqr() > 1.0E-4) {
+                    vel = vel.add(flatLook.normalize().scale(0.025));
                 }
 
-                player.setDeltaMovement(nextVel.x, nextVel.y + 0.03, nextVel.z);
-                player.fallDistance = 0.0f;
+                if (currentDist > swingRopeLength && currentDist > 0.001) {
+                    Vec3 radialDir = fromAnchor.normalize();
+                    double radialSpeed = vel.dot(radialDir);
+                    if (radialSpeed > 0.0) {
+                        vel = vel.subtract(radialDir.scale(radialSpeed));
+                    }
+                    double stretch = currentDist - swingRopeLength;
+                    vel = vel.subtract(radialDir.scale(Math.min(stretch * 0.35, 0.4)));
+                }
 
-                // Сбрасываем воздушные прыжки, чтобы после отцепления можно было красиво допрыгнуть
+                player.setDeltaMovement(vel);
+                resetServerFallDistance(player);
                 airJumpsUsed = 0;
                 wallClimbTicks = 0;
-
-                // Рисуем линию верёвки частицами от игрока до точки зацепа
-                int steps = Math.min((int) (distance * 2.5), 45);
-                for (int i = 1; i <= steps; i++) {
-                    double t = (double) i / (steps + 1);
-                    Vec3 p = playerCenter.lerp(ropeAnchor, t);
-                    client.level.addParticle(
-                            ParticleTypes.CRIT,
-                            p.x,
-                            p.y,
-                            p.z,
-                            0.0,
-                            0.0,
-                            0.0
-                    );
-                }
-            } else {
-                releaseRope();
-                ropeCooldown = ROPE_COOLDOWN_TICKS;
+                drawRopeParticles(client, playerCenter, swingAnchor);
             }
         }
-    }
-
-    private void releaseRope() {
-        ropeActive = false;
-        ropeAnchor = null;
-        ropeHoldTicks = 0;
     }
 
     private void handleMultiJumpAndWallMechanics(Minecraft client) {
@@ -202,11 +274,14 @@ public class Clones_on_phisicsClient implements ClientModInitializer {
         ticksInAir++;
         Vec3 vel = player.getDeltaMovement();
 
-        // 1. Медленный спуск по стене при зажатом Shift
         if (player.horizontalCollision && shiftDown && vel.y < 0.0) {
             double clampedY = Math.max(vel.y, WALL_SLIDE_MAX_FALL_SPEED);
             player.setDeltaMovement(vel.x, clampedY, vel.z);
             player.fallDistance = 0.0f;
+
+            if (ticksInAir % 4 == 0) {
+                resetServerFallDistance(player);
+            }
 
             if (client.level != null && ticksInAir % 3 == 0) {
                 client.level.addParticle(
@@ -222,82 +297,13 @@ public class Clones_on_phisicsClient implements ClientModInitializer {
             return;
         }
 
-        // 2. Лазание по стене вверх: упёрся в стену в воздухе и держишь прыжок
         if (player.horizontalCollision && jumpDown && wallClimbTicks < MAX_WALL_CLIMB_TICKS) {
             wallClimbTicks++;
-            player.setDeltaMovement(vel.x, 0.22, vel.z);
+            player.setDeltaMovement(vel.x, WALL_CLIMB_SPEED, vel.z);
             player.fallDistance = 0.0f;
+            if (wallClimbTicks % 4 == 0) {
+                resetServerFallDistance(player);
+            }
             return;
         }
 
-        // 3. Воздушные прыжки
-        if (jumpJustPressed && ticksInAir >= MIN_AIR_TICKS_BEFORE_AIR_JUMP && airJumpsUsed < MAX_AIR_JUMPS) {
-            airJumpsUsed++;
-
-            double jumpVelocity = Math.max(vel.y, 0.46);
-            player.setDeltaMovement(vel.x, jumpVelocity, vel.z);
-            player.fallDistance = 0.0f;
-
-            if (client.level != null) {
-                client.level.addParticle(
-                        ParticleTypes.CLOUD,
-                        player.getX(),
-                        player.getY() + 0.05,
-                        player.getZ(),
-                        0.0,
-                        -0.02,
-                        0.0
-                );
-            }
-        }
-    }
-
-    private void handleSlide(Minecraft client) {
-        LocalPlayer player = client.player;
-        if (player == null) {
-            slideTicks = 0;
-            slideCooldown = 0;
-            return;
-        }
-
-        if (slideCooldown > 0) {
-            slideCooldown--;
-        }
-
-        while (slideKey.consumeClick()) {
-            if (slideTicks == 0 && slideCooldown == 0 && player.onGround() && !player.isInWater()) {
-                Vec3 look = player.getLookAngle();
-                Vec3 flatLook = new Vec3(look.x, 0.0, look.z);
-                if (flatLook.lengthSqr() > 1.0E-4) {
-                    slideDirection = flatLook.normalize();
-                    slideTicks = SLIDE_DURATION_TICKS;
-                    slideCooldown = SLIDE_COOLDOWN_TICKS;
-                }
-            }
-        }
-
-        if (slideTicks > 0) {
-            slideTicks--;
-            double speed = 0.65 + (0.25 * ((double) slideTicks / SLIDE_DURATION_TICKS));
-            Vec3 currentVel = player.getDeltaMovement();
-            player.setDeltaMovement(
-                    slideDirection.x * speed,
-                    currentVel.y,
-                    slideDirection.z * speed
-            );
-            player.setPose(Pose.CROUCHING);
-
-            if (client.level != null) {
-                client.level.addParticle(
-                        ParticleTypes.CLOUD,
-                        player.getX(),
-                        player.getY() + 0.1,
-                        player.getZ(),
-                        -slideDirection.x * 0.05,
-                        0.02,
-                        -slideDirection.z * 0.05
-                );
-            }
-        }
-    }
-}
