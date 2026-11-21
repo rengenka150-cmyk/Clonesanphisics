@@ -1,96 +1,89 @@
 package com.example;
 
-import com.mojang.brigadier.CommandDispatcher;
+import com.mojang.brigadier.arguments.StringArgumentType;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
-import net.minecraft.commands.CommandBuildContext;
-import net.minecraft.commands.CommandSourceStack;
+import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
+import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.commands.Commands;
-import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.network.chat.Component;
-import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.world.entity.Entity;
-import net.minecraft.world.entity.EntityType;
-import net.minecraft.world.entity.decoration.ArmorStand;
-import net.minecraft.world.phys.Vec3;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.UUID;
 
 public class Clones_on_phisics implements ModInitializer {
     public static final String MOD_ID = "clones_on_phisics";
-    public static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
-
-    private static final Map<UUID, Integer> ACTIVE_CLONES = new HashMap<>();
 
     @Override
     public void onInitialize() {
-        LOGGER.info("Clones on Physics loaded!");
-        CommandRegistrationCallback.EVENT.register(this::registerCommands);
-        ServerTickEvents.END_SERVER_TICK.register(this::onServerTick);
-    }
+        PayloadTypeRegistry.playC2S().register(ResetFallPayload.TYPE, ResetFallPayload.STREAM_CODEC);
 
-    private void registerCommands(
-            CommandDispatcher<CommandSourceStack> dispatcher,
-            CommandBuildContext registryAccess,
-            Commands.CommandSelection environment
-    ) {
-        dispatcher.register(
-            Commands.literal("spawnclone")
-                .executes(context -> {
-                    CommandSourceStack source = context.getSource();
-                    if (!(source.getEntity() instanceof ServerPlayer player)) {
-                        source.sendFailure(Component.literal("Только игрок!"));
-                        return 0;
-                    }
-
-                    ServerLevel level = player.level();
-                    ArmorStand clone = new ArmorStand(EntityType.ARMOR_STAND, level);
-
-                    Vec3 look = player.getLookAngle();
-                    Vec3 pos = player.position().add(look.x * 1.5, 0.0, look.z * 1.5);
-
-                    clone.snapTo(pos.x, pos.y, pos.z, player.getYRot(), player.getXRot());
-                    clone.setDeltaMovement(look.x * 0.35, 0.15, look.z * 0.35);
-                    clone.setCustomName(Component.literal("Клон " + player.getName().getString()));
-                    clone.setCustomNameVisible(true);
-
-                    level.addFreshEntity(clone);
-                    ACTIVE_CLONES.put(clone.getUUID(), 100);
-
-                    level.sendParticles(ParticleTypes.CLOUD, pos.x, pos.y + 1.0, pos.z, 15, 0.3, 0.5, 0.3, 0.02);
-                    source.sendSuccess(() -> Component.literal("Клон создан!"), false);
-                    return 1;
-                })
-        );
-    }
-
-    private void onServerTick(MinecraftServer server) {
-        if (ACTIVE_CLONES.isEmpty()) return;
-
-        List<UUID> ids = new ArrayList<>(ACTIVE_CLONES.keySet());
-        for (UUID id : ids) {
-            int ticks = ACTIVE_CLONES.getOrDefault(id, 0) - 1;
-            if (ticks <= 0) {
-                for (ServerLevel level : server.getAllLevels()) {
-                    Entity entity = level.getEntity(id);
-                    if (entity != null) {
-                        level.sendParticles(ParticleTypes.POOF, entity.getX(), entity.getY() + 1.0, entity.getZ(), 10, 0.25, 0.4, 0.25, 0.02);
-                        entity.discard();
-                    }
+        ServerPlayNetworking.registerGlobalReceiver(ResetFallPayload.TYPE, (payload, context) -> {
+            context.server().execute(() -> {
+                ServerPlayer player = context.player();
+                if (player != null) {
+                    player.fallDistance = 0.0f;
                 }
-                ACTIVE_CLONES.remove(id);
-            } else {
-                ACTIVE_CLONES.put(id, ticks);
-            }
-        }
+            });
+        });
+
+        ServerTickEvents.END_WORLD_TICK.register(CloneLoopManager::serverTick);
+
+        CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
+            dispatcher.register(Commands.literal("spawnclone")
+                    .executes(context -> {
+                        if (context.getSource().getEntity() instanceof ServerPlayer player) {
+                            CloneLoopManager.spawnClone(player);
+                            player.sendSystemMessage(Component.literal("§aКлон создан!"));
+                        }
+                        return 1;
+                    }));
+
+            dispatcher.register(Commands.literal("cloop")
+                    .then(Commands.argument("action", StringArgumentType.word())
+                            .executes(context -> {
+                                String action = StringArgumentType.getString(context, "action");
+                                ServerPlayer player = context.getSource().getPlayer();
+
+                                switch (action.toLowerCase()) {
+                                    case "rec" -> {
+                                        CloneLoopManager.startRecording();
+                                        if (player != null) {
+                                            player.sendSystemMessage(Component.literal("§c● Запись маршрута началась!"));
+                                        }
+                                    }
+                                    case "play" -> {
+                                        CloneLoopManager.startPlaying();
+                                        if (player != null) {
+                                            player.sendSystemMessage(Component.literal("§a▶ Клоны запущены!"));
+                                        }
+                                    }
+                                    case "pause" -> {
+                                        CloneLoopManager.pausePlaying();
+                                        if (player != null) {
+                                            player.sendSystemMessage(Component.literal("§e❚❚ Пауза!"));
+                                        }
+                                    }
+                                    case "stop" -> {
+                                        CloneLoopManager.stopAll();
+                                        if (player != null) {
+                                            player.sendSystemMessage(Component.literal("§7■ Стоп!"));
+                                        }
+                                    }
+                                    case "clear" -> {
+                                        if (player != null && player.level() instanceof ServerLevel serverLevel) {
+                                            CloneLoopManager.clearClones(serverLevel);
+                                            player.sendSystemMessage(Component.literal("§7✖ Все клоны удалены!"));
+                                        }
+                                    }
+                                    default -> {
+                                        if (player != null) {
+                                            player.sendSystemMessage(Component.literal("§cНеизвестное действие: " + action));
+                                        }
+                                    }
+                                }
+                                return 1;
+                            })));
+        });
     }
 }
