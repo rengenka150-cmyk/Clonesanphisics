@@ -80,3 +80,6 @@ publishing {
 		// retrieving dependencies.
 	}
 }
+tasks.withType(Jar).configureEach {
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
