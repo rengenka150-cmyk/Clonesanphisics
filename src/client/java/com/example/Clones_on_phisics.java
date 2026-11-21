@@ -3,9 +3,12 @@ package com.example;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.commands.Commands;
+import net.minecraft.network.chat.Component;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 
 public class Clones_on_phisics implements ModInitializer {
@@ -24,18 +27,61 @@ public class Clones_on_phisics implements ModInitializer {
             });
         });
 
+        ServerTickEvents.END_SERVER_LEVEL.register(CloneLoopManager::serverTick);
+
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
             dispatcher.register(Commands.literal("spawnclone")
                     .executes(context -> {
-                        // Сюда на следующем шаге подключим спавн нашего физического NPC-клона
+                        if (context.getSource().getEntity() instanceof ServerPlayer player) {
+                            CloneLoopManager.spawnClone(player);
+                            player.sendSystemMessage(Component.literal("§aКлон создан!"));
+                        }
                         return 1;
                     }));
 
-            dispatcher.register(Commands.literal("clone")
+            dispatcher.register(Commands.literal("cloop")
                     .then(Commands.argument("action", StringArgumentType.word())
                             .executes(context -> {
                                 String action = StringArgumentType.getString(context, "action");
-                                // Обработка rec / play / pause / stop / clear подключится к менеджеру клонов
+                                ServerPlayer player = context.getSource().getPlayer();
+
+                                switch (action.toLowerCase()) {
+                                    case "rec" -> {
+                                        CloneLoopManager.startRecording();
+                                        if (player != null) {
+                                            player.sendSystemMessage(Component.literal("§c● Запись маршрута началась!"));
+                                        }
+                                    }
+                                    case "play" -> {
+                                        CloneLoopManager.startPlaying();
+                                        if (player != null) {
+                                            player.sendSystemMessage(Component.literal("§a▶ Клоны запущены!"));
+                                        }
+                                    }
+                                    case "pause" -> {
+                                        CloneLoopManager.pausePlaying();
+                                        if (player != null) {
+                                            player.sendSystemMessage(Component.literal("§e❚❚ Пауза!"));
+                                        }
+                                    }
+                                    case "stop" -> {
+                                        CloneLoopManager.stopAll();
+                                        if (player != null) {
+                                            player.sendSystemMessage(Component.literal("§7■ Стоп!"));
+                                        }
+                                    }
+                                    case "clear" -> {
+                                        if (player != null && player.level() instanceof ServerLevel serverLevel) {
+                                            CloneLoopManager.clearClones(serverLevel);
+                                            player.sendSystemMessage(Component.literal("§7✖ Все клоны удалены!"));
+                                        }
+                                    }
+                                    default -> {
+                                        if (player != null) {
+                                            player.sendSystemMessage(Component.literal("§cНеизвестное действие: " + action));
+                                        }
+                                    }
+                                }
                                 return 1;
                             })));
         });
