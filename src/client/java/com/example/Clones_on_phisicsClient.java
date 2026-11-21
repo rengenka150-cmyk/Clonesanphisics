@@ -108,7 +108,9 @@ public class Clones_on_phisicsClient implements ClientModInitializer {
     }
 
     private Vec3 raycastBlock(Minecraft client, LocalPlayer player, double maxDistance) {
-        if (client.level == null) return null;
+        if (client.level == null) {
+            return null;
+        }
         Vec3 eyePos = player.getEyePosition(1.0f);
         Vec3 lookVec = player.getLookAngle();
         Vec3 endPos = eyePos.add(lookVec.scale(maxDistance));
@@ -125,7 +127,9 @@ public class Clones_on_phisicsClient implements ClientModInitializer {
     }
 
     private void drawRopeParticles(Minecraft client, Vec3 from, Vec3 to) {
-        if (client.level == null) return;
+        if (client.level == null) {
+            return;
+        }
         double distance = from.distanceTo(to);
         int steps = Math.min((int) (distance * 2.5), 45);
         for (int i = 1; i <= steps; i++) {
@@ -307,3 +311,73 @@ public class Clones_on_phisicsClient implements ClientModInitializer {
             return;
         }
 
+        if (jumpJustPressed && ticksInAir >= MIN_AIR_TICKS_BEFORE_AIR_JUMP && airJumpsUsed < MAX_AIR_JUMPS) {
+            airJumpsUsed++;
+
+            double jumpVelocity = Math.max(vel.y, 0.46);
+            player.setDeltaMovement(vel.x, jumpVelocity, vel.z);
+            resetServerFallDistance(player);
+
+            if (client.level != null) {
+                client.level.addParticle(
+                        ParticleTypes.CLOUD,
+                        player.getX(),
+                        player.getY() + 0.05,
+                        player.getZ(),
+                        0.0,
+                        -0.02,
+                        0.0
+                );
+            }
+        }
+    }
+
+    private void handleSlide(Minecraft client) {
+        LocalPlayer player = client.player;
+        if (player == null) {
+            slideTicks = 0;
+            slideCooldown = 0;
+            return;
+        }
+
+        if (slideCooldown > 0) {
+            slideCooldown--;
+        }
+
+        while (slideKey.consumeClick()) {
+            if (slideTicks == 0 && slideCooldown == 0 && player.onGround() && !player.isInWater()) {
+                Vec3 look = player.getLookAngle();
+                Vec3 flatLook = new Vec3(look.x, 0.0, look.z);
+                if (flatLook.lengthSqr() > 1.0E-4) {
+                    slideDirection = flatLook.normalize();
+                    slideTicks = SLIDE_DURATION_TICKS;
+                    slideCooldown = SLIDE_COOLDOWN_TICKS;
+                }
+            }
+        }
+
+        if (slideTicks > 0) {
+            slideTicks--;
+            double speed = 0.65 + (0.25 * ((double) slideTicks / SLIDE_DURATION_TICKS));
+            Vec3 currentVel = player.getDeltaMovement();
+            player.setDeltaMovement(
+                    slideDirection.x * speed,
+                    currentVel.y,
+                    slideDirection.z * speed
+            );
+            player.setPose(Pose.CROUCHING);
+
+            if (client.level != null) {
+                client.level.addParticle(
+                        ParticleTypes.CLOUD,
+                        player.getX(),
+                        player.getY() + 0.1,
+                        player.getZ(),
+                        -slideDirection.x * 0.05,
+                        0.02,
+                        -slideDirection.z * 0.05
+                );
+            }
+        }
+    }
+}
