@@ -14,6 +14,7 @@ import org.lwjgl.glfw.GLFW;
 
 public class Clones_on_phisicsClient implements ClientModInitializer {
     private static final int MAX_AIR_JUMPS = 2; // 1 обычный + 2 в воздухе = тройной прыжок
+    private static final int MIN_AIR_TICKS_BEFORE_AIR_JUMP = 3;
     private static final int SLIDE_DURATION_TICKS = 14;
     private static final int SLIDE_COOLDOWN_TICKS = 20;
 
@@ -21,6 +22,7 @@ public class Clones_on_phisicsClient implements ClientModInitializer {
     private static KeyMapping slideKey;
 
     private int airJumpsUsed = 0;
+    private int ticksInAir = 0;
     private boolean jumpWasDown = false;
 
     private int slideTicks = 0;
@@ -59,6 +61,7 @@ public class Clones_on_phisicsClient implements ClientModInitializer {
         LocalPlayer player = client.player;
         if (player == null) {
             airJumpsUsed = 0;
+            ticksInAir = 0;
             jumpWasDown = false;
             return;
         }
@@ -69,10 +72,15 @@ public class Clones_on_phisicsClient implements ClientModInitializer {
 
         if (player.onGround() || player.isInWater() || player.onClimbable()) {
             airJumpsUsed = 0;
+            ticksInAir = 0;
+            player.fallDistance = 0.0f;
             return;
         }
 
-        if (jumpJustPressed && airJumpsUsed < MAX_AIR_JUMPS) {
+        ticksInAir++;
+        player.fallDistance = 0.0f;
+
+        if (jumpJustPressed && ticksInAir >= MIN_AIR_TICKS_BEFORE_AIR_JUMP && airJumpsUsed < MAX_AIR_JUMPS) {
             airJumpsUsed++;
 
             Vec3 vel = player.getDeltaMovement();
