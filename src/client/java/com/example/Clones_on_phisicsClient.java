@@ -9,6 +9,9 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.world.entity.Pose;
+import net.minecraft.world.level.ClipContext;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 import org.lwjgl.glfw.GLFW;
 
@@ -17,11 +20,16 @@ public class Clones_on_phisicsClient implements ClientModInitializer {
     private static final int MIN_AIR_TICKS_BEFORE_AIR_JUMP = 3;
     private static final int SLIDE_DURATION_TICKS = 14;
     private static final int SLIDE_COOLDOWN_TICKS = 20;
-    private static final int MAX_WALL_CLIMB_TICKS = 30; // ~1.5 секунды карабкания вверх
-    private static final double WALL_SLIDE_MAX_FALL_SPEED = -0.08; // Скорость медленного спуска на Shift
+    private static final int MAX_WALL_CLIMB_TICKS = 30;
+    private static final double WALL_SLIDE_MAX_FALL_SPEED = -0.08;
+
+    private static final double ROPE_MAX_DISTANCE = 24.0;
+    private static final int ROPE_MAX_HOLD_TICKS = 35; // ~1.75 сек удержания верёвки за один зацеп
+    private static final int ROPE_COOLDOWN_TICKS = 10;
 
     private static KeyMapping spawnCloneKey;
     private static KeyMapping slideKey;
+    private static KeyMapping grappleKey;
 
     private int airJumpsUsed = 0;
     private int ticksInAir = 0;
@@ -32,6 +40,11 @@ public class Clones_on_phisicsClient implements ClientModInitializer {
     private Vec3 slideDirection = Vec3.ZERO;
 
     private int wallClimbTicks = 0;
+
+    private boolean ropeActive = false;
+    private Vec3 ropeAnchor = null;
+    private int ropeHoldTicks = 0;
+    private int ropeCooldown = 0;
 
     @Override
     public void onInitializeClient() {
@@ -49,6 +62,13 @@ public class Clones_on_phisicsClient implements ClientModInitializer {
                 KeyMapping.Category.MOVEMENT
         ));
 
+        grappleKey = KeyBindingHelper.registerKeyBinding(new KeyMapping(
+                "key.clones_on_phisics.grapple",
+                InputConstants.Type.KEYSYM,
+                InputConstants.UNKNOWN.getValue(),
+                KeyMapping.Category.MOVEMENT
+        ));
+
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             while (spawnCloneKey.consumeClick()) {
                 if (client.player != null && client.player.connection != null) {
@@ -56,9 +76,105 @@ public class Clones_on_phisicsClient implements ClientModInitializer {
                 }
             }
 
+            handleGrappleRope(client);
             handleMultiJumpAndWallMechanics(client);
             handleSlide(client);
         });
+    }
+
+    private void handleGrappleRope(Minecraft client) {
+        LocalPlayer player = client.player;
+        if (player == null || client.level == null) {
+            releaseRope();
+            ropeCooldown = 0;
+            return;
+        }
+
+        if (ropeCooldown > 0) {
+            ropeCooldown--;
+        }
+
+        boolean grappleDown = grappleKey.isDown();
+
+        if (!ropeActive && grappleDown && ropeCooldown == 0) {
+            Vec3 eyePos = player.getEyePosition(1.0f);
+            Vec3 lookVec = player.getLookAngle();
+            Vec3 endPos = eyePos.add(lookVec.scale(ROPE_MAX_DISTANCE));
+
+            BlockHitResult hit = client.level.clip(new ClipContext(
+                    eyePos,
+                    endPos,
+                    ClipContext.Block.COLLIDER,
+                    ClipContext.Fluid.NONE,
+                    player
+            ));
+
+            if (hit.getType() == HitResult.Type.BLOCK) {
+                ropeAnchor = hit.getLocation();
+                ropeActive = true;
+                ropeHoldTicks = 0;
+            }
+        }
+
+        if (ropeActive) {
+            if (!grappleDown || ropeHoldTicks >= ROPE_MAX_HOLD_TICKS || ropeAnchor == null) {
+                releaseRope();
+                ropeCooldown = ROPE_COOLDOWN_TICKS;
+                return;
+            }
+
+            ropeHoldTicks++;
+            Vec3 playerCenter = player.position().add(0.0, player.getBbHeight() * 0.6, 0.0);
+            Vec3 toAnchor = ropeAnchor.subtract(playerCenter);
+            double distance = toAnchor.length();
+
+            if (distance > 1.2) {
+                Vec3 dir = toAnchor.normalize();
+                Vec3 vel = player.getDeltaMovement();
+
+                // Тяга к точке крепления + лёгкий подъём для полёта дугой
+                double pullStrength = 0.14;
+                Vec3 nextVel = vel.add(dir.scale(pullStrength));
+
+                // Ограничиваем максимальную скорость полёта на верёвке
+                double maxSpeed = 1.15;
+                if (nextVel.length() > maxSpeed) {
+                    nextVel = nextVel.normalize().scale(maxSpeed);
+                }
+
+                player.setDeltaMovement(nextVel.x, nextVel.y + 0.03, nextVel.z);
+                player.fallDistance = 0.0f;
+
+                // Сбрасываем воздушные прыжки, чтобы после отцепления можно было красиво допрыгнуть
+                airJumpsUsed = 0;
+                wallClimbTicks = 0;
+
+                // Рисуем линию верёвки частицами от игрока до точки зацепа
+                int steps = Math.min((int) (distance * 2.5), 45);
+                for (int i = 1; i <= steps; i++) {
+                    double t = (double) i / (steps + 1);
+                    Vec3 p = playerCenter.lerp(ropeAnchor, t);
+                    client.level.addParticle(
+                            ParticleTypes.CRIT,
+                            p.x,
+                            p.y,
+                            p.z,
+                            0.0,
+                            0.0,
+                            0.0
+                    );
+                }
+            } else {
+                releaseRope();
+                ropeCooldown = ROPE_COOLDOWN_TICKS;
+            }
+        }
+    }
+
+    private void releaseRope() {
+        ropeActive = false;
+        ropeAnchor = null;
+        ropeHoldTicks = 0;
     }
 
     private void handleMultiJumpAndWallMechanics(Minecraft client) {
